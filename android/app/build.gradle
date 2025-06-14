@@ -110,10 +110,16 @@ android {
 dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
+    implementation project(':react-native-vector-icons')
+    implementation project(':react-native-linear-gradient')
 
     if (hermesEnabled.toBoolean()) {
         implementation("com.facebook.react:hermes-android")
     } else {
         implementation jscFlavor
     }
+
+    implementation "androidx.core:core-ktx:1.9.0"
+    implementation "androidx.swiperefreshlayout:swiperefreshlayout:1.1.0"
 }
+apply from: "../../node_modules/react-native-vector-icons/fonts.gradle"
