@@ -1,181 +1,181 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
+  StyleSheet,
   TouchableOpacity,
   Image,
   Alert,
-  StyleSheet,
 } from 'react-native';
-import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
-import LinearGradient from 'react-native-linear-gradient';
-import { launchImageLibrary, launchCamera } from 'react-native-image-picker';
+import { launchImageLibrary } from 'react-native-image-picker';
+import { loadTensorflowModel } from 'react-native-fast-tflite';
+import RNFS from 'react-native-fs';
+import { Buffer } from 'buffer';
+import ImageResizer from 'react-native-image-resizer';
+
+let tfliteModel = null;
 
 export default function ImageDiagnosis() {
   const [imageUri, setImageUri] = useState(null);
+  const [prediction, setPrediction] = useState(null);
+  const [modelLoaded, setModelLoaded] = useState(false);
 
-  const pickImageFromGallery = () => {
+  useEffect(() => {
+    const init = async () => {
+      try {
+        const model = await loadTensorflowModel(
+          require('../../android/app/src/main/assets/ham10000_cancer_classifier.tflite'),
+        );
+        tfliteModel = model;
+        setModelLoaded(true);
+        console.log('✅ Model loaded');
+      } catch (err) {
+        console.error('Model load failed:', err);
+        Alert.alert('Error', 'Model load failed: ' + err.message);
+      }
+    };
+    init();
+  }, []);
+
+  const pickImage = () => {
     launchImageLibrary(
       {
         mediaType: 'photo',
-        maxWidth: 800,
-        maxHeight: 800,
         quality: 1,
+        includeBase64: true,
+        maxWidth: 224,
+        maxHeight: 224,
       },
       response => {
-        if (response.didCancel) {
-          // User cancelled
-        } else if (response.errorCode) {
-          Alert.alert('Error', response.errorMessage);
-        } else if (response.assets && response.assets.length > 0) {
+        if (response.assets && response.assets.length > 0) {
           setImageUri(response.assets[0].uri);
+          setPrediction(null);
         }
       },
     );
   };
 
-  const takePhoto = () => {
-    launchCamera(
-      {
-        mediaType: 'photo',
-        maxWidth: 800,
-        maxHeight: 800,
-        quality: 1,
-        saveToPhotos: true,
-      },
-      response => {
-        if (response.didCancel) {
-          // User cancelled
-        } else if (response.errorCode) {
-          Alert.alert('Error', response.errorMessage);
-        } else if (response.assets && response.assets.length > 0) {
-          setImageUri(response.assets[0].uri);
-        }
-      },
-    );
+  const preprocessImage = async uri => {
+    try {
+      // Resize image to 224x224
+      const resizedImage = await ImageResizer.createResizedImage(
+        uri,
+        224,
+        224,
+        'JPEG',
+        100,
+      );
+
+      // Read resized image as base64
+      const base64Image = await RNFS.readFile(resizedImage.uri, 'base64');
+
+      // Decode base64 to raw bytes (RGBA)
+      const rawImageData = Buffer.from(base64Image, 'base64');
+
+      // Prepare Float32Array for model input: [1, 224, 224, 3]
+      const input = new Float32Array(1 * 224 * 224 * 3);
+
+      // Iterate over pixels, skip alpha channel, normalize RGB to [0,1]
+      for (let i = 0, j = 0; i < rawImageData.length; i += 4, j += 3) {
+        input[j] = rawImageData[i] / 255.0; // R
+        input[j + 1] = rawImageData[i + 1] / 255.0; // G
+        input[j + 2] = rawImageData[i + 2] / 255.0; // B
+      }
+
+      return input;
+    } catch (err) {
+      console.error('Preprocessing error:', err);
+      Alert.alert('Preprocessing Error', err.message);
+    }
   };
 
-  // ...your imports and component logic remain the same
+  const runDiagnosis = async () => {
+    if (!imageUri || !modelLoaded) return;
+
+    try {
+      const input = await preprocessImage(imageUri);
+      const outputObj = await tfliteModel.run([input]); // Pass input as array
+      console.log('Model output:', outputObj);
+
+      const outputKey = Object.keys(outputObj)[0];
+      const output = outputObj[outputKey];
+
+      if (output instanceof Float32Array && output.length === 1) {
+        const score = output[0];
+        const label = score >= 0.5 ? 'Malignant' : 'Benign';
+        const confidence = (score >= 0.5 ? score : 1 - score) * 100;
+        setPrediction(`${label} (${confidence.toFixed(2)}%)`);
+      } else {
+        setPrediction('Unexpected model output');
+        console.warn('Output shape unexpected:', output);
+      }
+    } catch (err) {
+      console.error('Diagnosis error:', err);
+      Alert.alert('Diagnosis Failed', err.message);
+    }
+  };
 
   return (
     <View style={styles.container}>
-      <View style={styles.card}>
-        <MaterialCommunityIcons
-          name="camera-iris"
-          size={64}
-          color="#2A86FF"
-          style={{ marginBottom: 16 }}
-        />
-        <Text style={styles.title}>Image Diagnosis</Text>
-        <Text style={styles.subtitle}>
-          Upload or capture medical images for AI-powered analysis
+      <Text style={styles.title}>Image Diagnosis</Text>
+
+      {imageUri && <Image source={{ uri: imageUri }} style={styles.image} />}
+
+      {prediction && (
+        <Text style={styles.prediction}>Diagnosis: {prediction}</Text>
+      )}
+
+      <TouchableOpacity style={styles.button} onPress={pickImage}>
+        <Text style={styles.buttonText}>Choose Image</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={[styles.button, { backgroundColor: '#28a745' }]}
+        onPress={runDiagnosis}
+        disabled={!modelLoaded}
+      >
+        <Text style={styles.buttonText}>
+          {modelLoaded ? 'Diagnose' : 'Loading Model...'}
         </Text>
-
-        {imageUri ? (
-          <Image source={{ uri: imageUri }} style={styles.image} />
-        ) : (
-          <Text style={styles.placeholder}>No image selected</Text>
-        )}
-
-        <View style={styles.buttonRow}>
-          <TouchableOpacity
-            style={styles.buttonLeft}
-            onPress={pickImageFromGallery}
-          >
-            <LinearGradient
-              colors={['#FF6B6B', '#FF5252']}
-              style={styles.buttonGradient}
-            >
-              <Text style={styles.buttonText}>Choose from Gallery</Text>
-            </LinearGradient>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.buttonRight} onPress={takePhoto}>
-            <LinearGradient
-              colors={['#4A90E2', '#2A86FF']}
-              style={styles.buttonGradient}
-            >
-              <Text style={styles.buttonText}>Take Photo</Text>
-            </LinearGradient>
-          </TouchableOpacity>
-        </View>
-      </View>
+      </TouchableOpacity>
     </View>
   );
 }
+
 const styles = StyleSheet.create({
   container: {
+    paddingTop: 60,
     flex: 1,
-    backgroundColor: '#F5F7FB',
-    justifyContent: 'center',
     alignItems: 'center',
-  },
-  card: {
-    width: '90%',
-    backgroundColor: '#fff',
-    borderRadius: 20,
-    paddingVertical: 32,
-    paddingHorizontal: 24,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 10,
-    elevation: 5,
+    backgroundColor: '#f9f9f9',
   },
   title: {
     fontSize: 24,
     fontWeight: '700',
-    color: '#2A86FF',
-    marginBottom: 8,
-    textAlign: 'center',
-  },
-  subtitle: {
-    fontSize: 15,
-    color: '#666',
-    marginBottom: 18,
-    textAlign: 'center',
-    lineHeight: 22,
+    marginBottom: 20,
   },
   image: {
-    width: 180,
-    height: 180,
+    width: 224,
+    height: 224,
     borderRadius: 12,
-    marginBottom: 18,
-    marginTop: 8,
-    backgroundColor: '#eee',
+    marginBottom: 16,
+    backgroundColor: '#ddd',
   },
-  placeholder: {
+  prediction: {
     fontSize: 16,
-    color: '#aaa',
-    marginBottom: 18,
-    marginTop: 8,
+    fontWeight: '600',
+    marginBottom: 20,
+    color: '#2a86ff',
   },
-  buttonRow: {
-    flexDirection: 'row',
-    width: '100%',
-    justifyContent: 'space-between',
-    marginTop: 8,
-  },
-  buttonLeft: {
-    flex: 1,
-    marginRight: 8,
-    borderRadius: 14,
-    overflow: 'hidden',
-  },
-  buttonRight: {
-    flex: 1,
-    marginLeft: 8,
-    borderRadius: 14,
-    overflow: 'hidden',
-  },
-  buttonGradient: {
-    paddingVertical: 14,
-    alignItems: 'center',
-    borderRadius: 14,
+  button: {
+    backgroundColor: '#007bff',
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 10,
+    marginVertical: 10,
   },
   buttonText: {
-    color: 'white',
-    fontSize: 15,
-    fontWeight: '600',
+    color: '#fff',
+    fontSize: 16,
   },
 });
