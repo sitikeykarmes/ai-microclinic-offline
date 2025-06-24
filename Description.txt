@@ -1,0 +1,5 @@
+Use existing datasets like SymCAT, DIARETDB, or Disease-Symptom from Kaggle.
+
+DIARETDB1 - Standard Diabetic Retinopathy Database-https://www.kaggle.com/datasets/nguyenhung1903/diaretdb1-standard-diabetic-retinopathy-database
+Disease Symptom Prediction-https://www.kaggle.com/datasets/itachi9604/disease-symptom-description-dataset
+Disease-Symptom Dataset-https://www.kaggle.com/datasets/dhivyeshrk/diseases-and-symptoms-dataset
