@@ -9,8 +9,9 @@ import HomeScreen from './App/components/HomeScreen';
 import DiagnosisScreen from './App/components/DiagnosisScreen';
 import SymptomForm from './App/components/SymptomForm';
 import ImageDiagnosis from './App/components/ImageDiagnosis';
+import DiseaseDetailsScreen from './App/components/DiseaseDetailsScreen';
+import ImageDiagnosisResult from './App/components/ImageDiagnosisResult'; // ✅ NEW SCREEN
 
-// Placeholder AccountScreen (replace with your own if needed)
 function AccountScreen() {
   return (
     <View
@@ -31,18 +32,17 @@ function AccountScreen() {
   );
 }
 
-// Custom header with your icon and title
 const HeaderWithCustomIcon = () => (
   <View
     style={{
       flexDirection: 'row',
       alignItems: 'center',
-      justifyContent: 'center', // Center horizontally
-      flex: 1, // Take all available space
+      justifyContent: 'center',
+      flex: 1,
     }}
   >
     <Image
-      source={require('./assets/healthcare.png')} // <-- Update this path if your icon is elsewhere
+      source={require('./assets/healthcare.png')}
       style={{ width: 28, height: 28, resizeMode: 'contain' }}
     />
     <Text
@@ -147,6 +147,16 @@ export default function App() {
         <Stack.Screen
           name="ImageDiagnosis"
           component={ImageDiagnosis}
+          options={{ headerTitle: () => <HeaderWithCustomIcon /> }}
+        />
+        <Stack.Screen
+          name="DiseaseDetails"
+          component={DiseaseDetailsScreen}
+          options={{ headerTitle: () => <HeaderWithCustomIcon /> }}
+        />
+        <Stack.Screen
+          name="ImageDiagnosisResult" // ✅ NEW SCREEN ADDED HERE
+          component={ImageDiagnosisResult}
           options={{ headerTitle: () => <HeaderWithCustomIcon /> }}
         />
       </Stack.Navigator>

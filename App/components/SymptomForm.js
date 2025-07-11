@@ -13,46 +13,178 @@ import {
 } from 'react-native';
 import { loadTensorflowModel } from 'react-native-fast-tflite';
 import RNFS from 'react-native-fs';
+import { useNavigation } from '@react-navigation/native';
+
+const CATEGORY_DEFS = [
+  {
+    id: 'eyes_nose_mouth',
+    label: 'Eyes, Nose & Mouth',
+    keywords: [
+      'eye',
+      'vision',
+      'sight',
+      'red_eye',
+      'itchy_eye',
+      'watering_eye',
+      'photophobia',
+      'nose',
+      'nasal',
+      'smell',
+      'sinus',
+      'runny_nose',
+      'congestion',
+      'sneezing',
+      'anosmia',
+      'mouth',
+      'oral',
+      'tongue',
+      'taste',
+      'sore_mouth',
+      'ulcer',
+      'dry_mouth',
+      'bad_breath',
+      'dysgeusia',
+    ],
+  },
+  {
+    id: 'head_neck',
+    label: 'Head & Neck',
+    keywords: [
+      'head',
+      'neck',
+      'throat',
+      'dizziness',
+      'sore_throat',
+      'stiff_neck',
+      'swollen_lymph',
+    ],
+  },
+  {
+    id: 'chest_breathing',
+    label: 'Chest & Breathing',
+    keywords: [
+      'chest',
+      'cough',
+      'breath',
+      'wheeze',
+      'palpitation',
+      'sputum',
+      'asthma',
+    ],
+  },
+  {
+    id: 'abdomen_digestion',
+    label: 'Abdomen & Digestion',
+    keywords: [
+      'abdominal',
+      'stomach',
+      'nausea',
+      'vomit',
+      'diarrhea',
+      'constipation',
+      'bloating',
+      'heartburn',
+    ],
+  },
+  {
+    id: 'limbs_movement',
+    label: 'Limbs & Movement',
+    keywords: [
+      'joint',
+      'muscle',
+      'back',
+      'limb',
+      'swelling',
+      'mobility',
+      'tingling',
+      'numb',
+    ],
+  },
+  {
+    id: 'energy_general',
+    label: 'Energy & General',
+    keywords: [
+      'fever',
+      'fatigue',
+      'chill',
+      'weight',
+      'sweat',
+      'weakness',
+      'malaise',
+    ],
+  },
+  {
+    id: 'skin_appearance',
+    label: 'Skin & Appearance',
+    keywords: [
+      'rash',
+      'itch',
+      'skin',
+      'hair',
+      'nail',
+      'jaundice',
+      'hive',
+      'discoloration',
+    ],
+  },
+  {
+    id: 'pain_sensations',
+    label: 'Pain & Sensations',
+    keywords: ['burn', 'stab', 'cramp', 'tender', 'pain'],
+  },
+  {
+    id: 'elimination_fluids',
+    label: 'Elimination & Fluids',
+    keywords: [
+      'urine',
+      'urinary',
+      'stool',
+      'bowel',
+      'thirst',
+      'incontinence',
+      'hematuria',
+    ],
+  },
+  {
+    id: 'other',
+    label: 'Other Symptoms',
+    keywords: [],
+  },
+];
 
 let tfliteModel = null;
 let symptomList = [];
 let diseaseMap = {};
-const symptomCategories = {
-  All: 'All Symptoms',
-  head: 'Head/Neck',
-  chest: 'Chest',
-  abdomen: 'Abdomen',
-  limbs: 'Limbs',
-  skin: 'Skin',
-  general: 'General',
-};
 
 export default function SymptomDiagnosis() {
+  const navigation = useNavigation();
   const [selectedSymptoms, setSelectedSymptoms] = useState([]);
-  const [prediction, setPrediction] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState('All');
   const [showResultModal, setShowResultModal] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isPredicting, setIsPredicting] = useState(false);
+  const [categoryBuckets, setCategoryBuckets] = useState({});
+  const [categoryTabs, setCategoryTabs] = useState({ All: 'All Symptoms' });
+  const [topPredictions, setTopPredictions] = useState([]);
 
   useEffect(() => {
     const initModel = async () => {
       try {
-        // Load TFLite model
         const model = await loadTensorflowModel(
           require('../../android/app/src/main/assets/disease_model.tflite'),
         );
         tfliteModel = model;
 
-        // Load symptom and disease mappings
         const symptomRaw = await RNFS.readFileAssets('symptom_mapping.json');
         const diseaseRaw = await RNFS.readFileAssets('disease_mapping.json');
         symptomList = JSON.parse(symptomRaw);
         diseaseMap = JSON.parse(diseaseRaw);
 
+        const buckets = categorizeSymptoms(symptomList);
+        setCategoryBuckets(buckets);
+        setCategoryTabs(getCategoryTabs(buckets));
         setIsLoading(false);
-        console.log('✅ Model and mappings loaded');
       } catch (err) {
         console.error('Load failed:', err);
         Alert.alert('Load error', err.message);
@@ -61,6 +193,42 @@ export default function SymptomDiagnosis() {
     };
     initModel();
   }, []);
+
+  const getCategoryTabs = buckets => ({
+    All: 'All Symptoms',
+    ...Object.fromEntries(
+      CATEGORY_DEFS.filter(
+        cat =>
+          cat.id !== 'other' && buckets[cat.id] && buckets[cat.id].length > 0,
+      ).map(cat => [cat.id, cat.label]),
+    ),
+    ...(buckets.other && buckets.other.length > 0
+      ? { other: 'Other Symptoms' }
+      : {}),
+  });
+
+  const categorizeSymptoms = symptoms => {
+    const buckets = {};
+    CATEGORY_DEFS.forEach(cat => {
+      buckets[cat.id] = [];
+    });
+    symptoms.forEach(symptom => {
+      let matched = false;
+      const symptomLower = symptom.toLowerCase();
+      for (const cat of CATEGORY_DEFS) {
+        if (
+          cat.keywords.length > 0 &&
+          cat.keywords.some(kw => symptomLower.includes(kw))
+        ) {
+          buckets[cat.id].push(symptom);
+          matched = true;
+          break;
+        }
+      }
+      if (!matched) buckets.other.push(symptom);
+    });
+    return buckets;
+  };
 
   const toggleSymptom = symptom => {
     setSelectedSymptoms(prev =>
@@ -84,14 +252,21 @@ export default function SymptomDiagnosis() {
 
       const floatInput = new Float32Array(input);
       const output = await tfliteModel.run([floatInput]);
-
       const key = Object.keys(output)[0];
       const probs = output[key];
 
-      const maxIdx = probs.indexOf(Math.max(...probs));
-      const disease = diseaseMap[maxIdx];
+      const predictionResults = [];
+      for (let i = 0; i < probs.length; i++) {
+        predictionResults.push({
+          disease: diseaseMap[i],
+          confidence: probs[i],
+          percentage: (probs[i] * 100).toFixed(2) + '%',
+        });
+      }
 
-      setPrediction(disease);
+      predictionResults.sort((a, b) => b.confidence - a.confidence);
+      const top5 = predictionResults.slice(0, 5);
+      setTopPredictions(top5);
       setShowResultModal(true);
     } catch (err) {
       console.error('Prediction error:', err);
@@ -101,26 +276,19 @@ export default function SymptomDiagnosis() {
     }
   };
 
-  // Filter symptoms based on search and category
   const getFilteredSymptoms = () => {
-    let filtered = symptomList;
-
-    // Apply category filter
-    if (activeCategory !== 'All') {
-      // In a real app, you'd filter by actual category mapping
-      filtered = filtered.filter(symptom =>
-        symptom.toLowerCase().includes(activeCategory),
-      );
+    let filtered;
+    if (activeCategory === 'All') {
+      filtered = symptomList;
+    } else {
+      filtered = categoryBuckets[activeCategory] || [];
     }
-
-    // Apply search filter
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
       filtered = filtered.filter(symptom =>
         symptom.toLowerCase().includes(query),
       );
     }
-
     return filtered;
   };
 
@@ -134,7 +302,7 @@ export default function SymptomDiagnosis() {
     >
       <Text style={styles.symptomText}>{item.replace(/_/g, ' ')}</Text>
       {selectedSymptoms.includes(item) && (
-        <Text style={styles.checkmark}>✓</Text>
+        <Text style={styles.checkmark}>{'\u2713'}</Text>
       )}
     </TouchableOpacity>
   );
@@ -150,7 +318,6 @@ export default function SymptomDiagnosis() {
 
   return (
     <View style={styles.container}>
-      {/* Header */}
       <View style={styles.header}>
         <Text style={styles.title}>Symptom Checker</Text>
         <Text style={styles.subtitle}>
@@ -158,7 +325,6 @@ export default function SymptomDiagnosis() {
         </Text>
       </View>
 
-      {/* Search Bar */}
       <View style={styles.searchContainer}>
         <Text style={styles.searchIcon}>🔍</Text>
         <TextInput
@@ -170,13 +336,12 @@ export default function SymptomDiagnosis() {
         />
       </View>
 
-      {/* Category Tabs */}
       <ScrollView
         horizontal
         style={styles.categoryContainer}
         showsHorizontalScrollIndicator={false}
       >
-        {Object.keys(symptomCategories).map(categoryId => (
+        {Object.keys(categoryTabs).map(categoryId => (
           <TouchableOpacity
             key={categoryId}
             style={[
@@ -191,13 +356,12 @@ export default function SymptomDiagnosis() {
                 activeCategory === categoryId && styles.activeCategoryText,
               ]}
             >
-              {symptomCategories[categoryId]}
+              {categoryTabs[categoryId]}
             </Text>
           </TouchableOpacity>
         ))}
       </ScrollView>
 
-      {/* Selected Symptoms Preview */}
       {selectedSymptoms.length > 0 && (
         <View style={styles.selectedContainer}>
           <Text style={styles.sectionTitle}>Selected Symptoms</Text>
@@ -223,12 +387,11 @@ export default function SymptomDiagnosis() {
         </View>
       )}
 
-      {/* Symptoms List */}
       <View style={styles.symptomsContainer}>
         <Text style={styles.sectionTitle}>
           {activeCategory === 'All'
             ? 'All Symptoms'
-            : symptomCategories[activeCategory]}
+            : categoryTabs[activeCategory]}
         </Text>
 
         <FlatList
@@ -240,7 +403,6 @@ export default function SymptomDiagnosis() {
         />
       </View>
 
-      {/* Diagnosis Button */}
       <TouchableOpacity
         style={[
           styles.diagnoseButton,
@@ -256,7 +418,6 @@ export default function SymptomDiagnosis() {
         )}
       </TouchableOpacity>
 
-      {/* Result Modal */}
       <Modal
         visible={showResultModal}
         animationType="slide"
@@ -272,18 +433,26 @@ export default function SymptomDiagnosis() {
               <Text style={styles.closeButtonText}>×</Text>
             </TouchableOpacity>
 
-            <Text style={styles.resultIcon}>{prediction ? '✅' : '⚠️'}</Text>
+            <Text style={styles.modalTitle}>Top 5 Predictions</Text>
 
-            <Text style={styles.modalTitle}>Diagnosis Result</Text>
-
-            {prediction ? (
+            {topPredictions.length > 0 ? (
               <>
-                <Text style={styles.diseaseName}>{prediction}</Text>
                 <Text style={styles.resultDescription}>
-                  Based on your symptoms, this is the most likely condition.
-                  Please consult with a healthcare professional for
-                  confirmation.
+                  Based on your symptoms:
                 </Text>
+                <View style={styles.predictionsContainer}>
+                  {topPredictions.map((prediction, index) => (
+                    <View key={index} style={styles.predictionRow}>
+                      <Text style={styles.predictionRank}>{index + 1}.</Text>
+                      <Text style={styles.predictionName}>
+                        {prediction.disease}
+                      </Text>
+                      <Text style={styles.predictionConfidence}>
+                        {prediction.percentage}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
               </>
             ) : (
               <Text style={styles.resultDescription}>
@@ -296,6 +465,22 @@ export default function SymptomDiagnosis() {
               onPress={() => setShowResultModal(false)}
             >
               <Text style={styles.backButtonText}>Back to Symptoms</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.backButton,
+                { marginTop: 10, backgroundColor: '#2a86ff' },
+              ]}
+              onPress={() => {
+                setShowResultModal(false);
+                navigation.navigate('DiseaseDetails', {
+                  topDiseases: topPredictions,
+                });
+              }}
+            >
+              <Text style={[styles.backButtonText, { color: '#fff' }]}>
+                View Disease Info
+              </Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -492,11 +677,6 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: 'bold',
   },
-  resultIcon: {
-    fontSize: 60,
-    textAlign: 'center',
-    marginVertical: 20,
-  },
   modalTitle: {
     fontSize: 22,
     fontWeight: '800',
@@ -504,19 +684,42 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: 10,
   },
-  diseaseName: {
-    fontSize: 28,
-    fontWeight: '800',
-    color: '#2a86ff',
-    textAlign: 'center',
-    marginVertical: 20,
-  },
   resultDescription: {
     fontSize: 16,
     color: '#4A5568',
     textAlign: 'center',
     lineHeight: 24,
-    marginBottom: 30,
+    marginBottom: 10,
+  },
+  predictionsContainer: {
+    marginVertical: 15,
+  },
+  predictionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 15,
+    backgroundColor: '#f8f9fa',
+    borderRadius: 10,
+  },
+  predictionRank: {
+    fontWeight: 'bold',
+    fontSize: 16,
+    color: '#333',
+    minWidth: 30,
+  },
+  predictionName: {
+    flex: 1,
+    fontSize: 16,
+    color: '#333',
+  },
+  predictionConfidence: {
+    fontWeight: '600',
+    fontSize: 16,
+    color: '#2a86ff',
+    minWidth: 70,
+    textAlign: 'right',
   },
   backButton: {
     padding: 16,
@@ -524,6 +727,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderColor: '#E2E8F0',
     borderWidth: 1,
+    marginTop: 10,
   },
   backButtonText: {
     color: '#4A5568',

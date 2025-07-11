@@ -1,42 +1,32 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
-  StyleSheet,
   TouchableOpacity,
   Image,
+  StyleSheet,
   Alert,
 } from 'react-native';
 import { launchImageLibrary } from 'react-native-image-picker';
-
-import { loadTensorflowModel } from 'react-native-fast-tflite';
-import RNFS from 'react-native-fs';
-import { Buffer } from 'buffer';
-import ImageResizer from 'react-native-image-resizer';
-
-let tfliteModel = null;
+import { Picker } from '@react-native-picker/picker';
+import { useNavigation } from '@react-navigation/native';
+import { preprocessImage } from '../utils/imageUtils';
+import { loadModel, runModel } from '../models/ModelManager';
 
 export default function ImageDiagnosis() {
+  const navigation = useNavigation();
+
   const [imageUri, setImageUri] = useState(null);
-  const [prediction, setPrediction] = useState(null);
+  const [imageName, setImageName] = useState('');
+  const [diagnosisType, setDiagnosisType] = useState('');
   const [modelLoaded, setModelLoaded] = useState(false);
 
-  useEffect(() => {
-    const init = async () => {
-      try {
-        const model = await loadTensorflowModel(
-          require('../../android/app/src/main/assets/ham10000_cancer_classifier.tflite'),
-        );
-        tfliteModel = model;
-        setModelLoaded(true);
-        console.log('✅ Model loaded');
-      } catch (err) {
-        console.error('Model load failed:', err);
-        Alert.alert('Error', 'Model load failed: ' + err.message);
-      }
-    };
-    init();
-  }, []);
+  const diagnosisOptions = [
+    { key: 'skin', label: 'Skin Cancer' },
+    { key: 'pneumonia', label: 'Chest X-ray (Pneumonia)' },
+    { key: 'tb', label: 'Chest X-ray (Tuberculosis)' },
+    { key: 'wound', label: 'Wound Detection' },
+  ];
 
   const pickImage = () => {
     launchImageLibrary(
@@ -50,94 +40,141 @@ export default function ImageDiagnosis() {
       response => {
         if (response.assets && response.assets.length > 0) {
           setImageUri(response.assets[0].uri);
-          setPrediction(null);
+          setImageName(response.assets[0].fileName || 'Selected Image');
         }
       },
     );
   };
 
-  const preprocessImage = async uri => {
+  const handleModelSelection = async type => {
+    setDiagnosisType(type);
     try {
-      // Resize image to 224x224
-      const resizedImage = await ImageResizer.createResizedImage(
-        uri,
-        224,
-        224,
-        'JPEG',
-        100,
-      );
-
-      // Read resized image as base64
-      const base64Image = await RNFS.readFile(resizedImage.uri, 'base64');
-
-      // Decode base64 to raw bytes (RGBA)
-      const rawImageData = Buffer.from(base64Image, 'base64');
-
-      // Prepare Float32Array for model input: [1, 224, 224, 3]
-      const input = new Float32Array(1 * 224 * 224 * 3);
-
-      // Iterate over pixels, skip alpha channel, normalize RGB to [0,1]
-      for (let i = 0, j = 0; i < rawImageData.length; i += 4, j += 3) {
-        input[j] = rawImageData[i] / 255.0; // R
-        input[j + 1] = rawImageData[i + 1] / 255.0; // G
-        input[j + 2] = rawImageData[i + 2] / 255.0; // B
-      }
-
-      return input;
+      await loadModel(type);
+      setModelLoaded(true);
     } catch (err) {
-      console.error('Preprocessing error:', err);
-      Alert.alert('Preprocessing Error', err.message);
+      Alert.alert('Model Load Failed', err.message);
     }
   };
 
-  const runDiagnosis = async () => {
-    if (!imageUri || !modelLoaded) return;
-
+  const handleDiagnose = async () => {
     try {
-      const input = await preprocessImage(imageUri);
-      const outputObj = await tfliteModel.run([input]); // Pass input as array
-      console.log('Model output:', outputObj);
+      // Set inputSize based on model
+      let inputSize = 224;
+      if (diagnosisType === 'wound') inputSize = 299;
 
-      const outputKey = Object.keys(outputObj)[0];
-      const output = outputObj[outputKey];
+      const input = await preprocessImage(imageUri, inputSize, diagnosisType);
+      const outputObj = await runModel(diagnosisType, input);
+      const output = Object.values(outputObj)[0];
 
-      if (output instanceof Float32Array && output.length === 1) {
-        const score = output[0];
-        const label = score >= 0.5 ? 'Malignant' : 'Benign';
-        const confidence = (score >= 0.5 ? score : 1 - score) * 100;
-        setPrediction(`${label} (${confidence.toFixed(2)}%)`);
-      } else {
-        setPrediction('Unexpected model output');
-        console.warn('Output shape unexpected:', output);
+      let label, confidence;
+
+      if (diagnosisType === 'wound') {
+        // Example: Suppose your wound model predicts among 3 classes
+        // You must map the output index to class label
+        // Replace with your actual wound class labels:
+        const woundLabels = [
+          'Abrasions',
+          'Bruises',
+          'Burns',
+          'Cut',
+          'Diabetic Wounds',
+          'Ingrown_nails',
+          'Laseration',
+          'Normal',
+          'Pressure Wounds',
+          'Stab_wound',
+          'Surgical Wounds',
+          'Venous Wounds',
+        ];
+        const predictedIndex = output.indexOf(Math.max(...output));
+        label = woundLabels[predictedIndex];
+        confidence = output[predictedIndex] * 100;
+      } else if (output.length === 1) {
+        if (diagnosisType === 'pneumonia') {
+          label = output[0] >= 0.5 ? 'Pneumonia' : 'Normal';
+        } else if (diagnosisType === 'skin') {
+          label = output[0] >= 0.5 ? 'Malignant' : 'Benign';
+        } else if (diagnosisType === 'tb') {
+          label = output[0] >= 0.5 ? 'TB Detected' : 'Normal';
+        }
+        confidence = (output[0] >= 0.5 ? output[0] : 1 - output[0]) * 100;
       }
+
+      navigation.navigate('ImageDiagnosisResult', {
+        imageUri,
+        label,
+        confidence,
+        diagnosisType,
+      });
     } catch (err) {
-      console.error('Diagnosis error:', err);
       Alert.alert('Diagnosis Failed', err.message);
     }
   };
 
+  const canDiagnose = imageUri && modelLoaded;
+
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Image Diagnosis</Text>
+      <Text style={styles.heading}>Image Diagnosis</Text>
 
-      {imageUri && <Image source={{ uri: imageUri }} style={styles.image} />}
-
-      {prediction && (
-        <Text style={styles.prediction}>Diagnosis: {prediction}</Text>
-      )}
-
-      <TouchableOpacity style={styles.button} onPress={pickImage}>
-        <Text style={styles.buttonText}>Choose Image</Text>
+      <Text style={styles.sectionLabel}>Upload Image</Text>
+      <TouchableOpacity style={styles.uploadBox} onPress={pickImage}>
+        {imageUri ? (
+          <View style={styles.imageWrapper}>
+            <Image source={{ uri: imageUri }} style={styles.uploadedImage} />
+            <TouchableOpacity
+              style={styles.removeButton}
+              onPress={() => {
+                setImageUri(null);
+                setImageName('');
+                setModelLoaded(false);
+              }}
+            >
+              <Text style={styles.removeButtonText}>✕</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <>
+            <Text style={styles.uploadText}>
+              Tap to upload an image for diagnosis
+            </Text>
+            <View style={styles.uploadButton}>
+              <Text style={styles.uploadButtonText}>Upload</Text>
+            </View>
+          </>
+        )}
       </TouchableOpacity>
 
+      {/* 👇 Image Name Below Image */}
+      {imageUri && imageName ? (
+        <Text style={styles.imageName}>{imageName}</Text>
+      ) : null}
+
+      <Text style={styles.sectionLabel}>Select Model</Text>
+      <View style={styles.dropdown}>
+        <Picker
+          selectedValue={diagnosisType}
+          onValueChange={value => {
+            if (value !== '') handleModelSelection(value);
+          }}
+        >
+          <Picker.Item label="Select Model" value="" />
+          {diagnosisOptions.map(option => (
+            <Picker.Item
+              key={option.key}
+              label={option.label}
+              value={option.key}
+            />
+          ))}
+        </Picker>
+      </View>
+
       <TouchableOpacity
-        style={[styles.button, { backgroundColor: '#28a745' }]}
-        onPress={runDiagnosis}
-        disabled={!modelLoaded}
+        style={[styles.diagnoseButton, !canDiagnose && { opacity: 0.4 }]}
+        disabled={!canDiagnose}
+        onPress={handleDiagnose}
       >
-        <Text style={styles.buttonText}>
-          {modelLoaded ? 'Diagnose' : 'Loading Model...'}
-        </Text>
+        <Text style={styles.diagnoseButtonText}>Diagnose</Text>
       </TouchableOpacity>
     </View>
   );
@@ -145,38 +182,96 @@ export default function ImageDiagnosis() {
 
 const styles = StyleSheet.create({
   container: {
-    paddingTop: 60,
     flex: 1,
-    alignItems: 'center',
-    backgroundColor: '#f9f9f9',
+    padding: 20,
+    backgroundColor: '#f6f8f9',
   },
-  title: {
-    fontSize: 24,
-    fontWeight: '700',
+  heading: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    textAlign: 'center',
     marginBottom: 20,
   },
-  image: {
-    width: 224,
-    height: 224,
-    borderRadius: 12,
-    marginBottom: 16,
-    backgroundColor: '#ddd',
-  },
-  prediction: {
+  sectionLabel: {
     fontSize: 16,
-    fontWeight: '600',
-    marginBottom: 20,
-    color: '#2a86ff',
+    fontWeight: 'bold',
+    marginBottom: 8,
+    marginTop: 20,
   },
-  button: {
-    backgroundColor: '#007bff',
-    paddingVertical: 12,
-    paddingHorizontal: 24,
+  uploadBox: {
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    borderColor: '#ccc',
     borderRadius: 10,
-    marginVertical: 10,
+    padding: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 200,
+    backgroundColor: '#fff',
   },
-  buttonText: {
+  uploadText: {
+    color: '#888',
+    marginBottom: 10,
+  },
+  uploadButton: {
+    backgroundColor: '#eef1f4',
+    paddingVertical: 8,
+    paddingHorizontal: 20,
+    borderRadius: 20,
+  },
+  uploadButtonText: {
+    color: '#444',
+    fontWeight: '600',
+  },
+  uploadedImage: {
+    width: 180,
+    height: 180,
+    borderRadius: 10,
+  },
+  imageWrapper: {
+    position: 'relative',
+  },
+  removeButton: {
+    position: 'absolute',
+    top: 5,
+    right: 5,
+    backgroundColor: 'black',
+    borderRadius: 12,
+    width: 20,
+    height: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 2,
+  },
+  removeButtonText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 14,
+    lineHeight: 14,
+  },
+  imageName: {
+    marginTop: 10,
+    textAlign: 'center',
+    color: '#333',
+    fontSize: 14,
+  },
+  dropdown: {
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#ccc',
+    overflow: 'hidden',
+  },
+  diagnoseButton: {
+    backgroundColor: '#2A86FF',
+    paddingVertical: 14,
+    borderRadius: 30,
+    marginTop: 40,
+    alignItems: 'center',
+  },
+  diagnoseButtonText: {
     color: '#fff',
     fontSize: 16,
+    fontWeight: 'bold',
   },
 });
